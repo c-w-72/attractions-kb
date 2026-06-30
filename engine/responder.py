@@ -6,7 +6,11 @@
 """
 
 import random
+import os
+import streamlit as st
 from engine.intent import SCENARIO_LABELS
+from engine.llm import get_llm, make_prompt
+from engine.retriever import QUERY_EXPANSIONS
 
 
 # ===== 跟进问题模板 =====
@@ -114,10 +118,43 @@ class Responder:
     def __init__(self, retriever):
         self.retriever = retriever
         self.context = ConversationContext()
+        self.llm = get_llm()
 
-    def generate(self, query: str, entities: dict) -> dict:
-        """生成回答（非流式，兼容旧接口）"""
-        return self._build_answer(query, entities)
+    @property
+    def use_llm(self) -> bool:
+        return self.llm is not None and st.session_state.get("llm_enabled", False)
+
+    def _llm_answer(self, query: str, entities: dict) -> dict:
+        """LLM 生成回答（含跟进问题）"""
+        # 动态检索相关景点上下文，而非固定传前 N 个
+        results = self.retriever.search(query, top_k=8)
+        relevant = [att for att, _ in results] if results else self.retriever.attractions[:5]
+        messages = make_prompt(query, entities, relevant)
+        result = self.llm.chat(messages)
+        if result:
+            answer_info = {"type": "llm", "attraction_name": entities.get("attraction_name")}
+            followups = self._generate_context_followups(answer_info)
+            self.context.update(entities, answer_info)
+            return {"answer": result, "answer_info": answer_info, "followups": followups, "context": self.context.to_dict()}
+
+        # LLM 失败时回退（单次消费 generator，避免上下文重复更新）
+        answer_info = {}
+        followups = []
+        content_parts = []
+        for chunk_type, chunk_content in self.generate_stream(query, entities):
+            if chunk_type == "content":
+                content_parts.append(chunk_content)
+            elif chunk_type == "followups":
+                followups = chunk_content
+            elif chunk_type == "answer_info":
+                answer_info = chunk_content
+
+        return {
+            "answer": "\n\n".join(content_parts) if content_parts else "暂无匹配信息",
+            "answer_info": answer_info,
+            "followups": followups,
+            "context": self.context.to_dict(),
+        }
 
     def generate_stream(self, query: str, entities: dict):
         """生成回答（流式，逐段 yield）"""
@@ -129,12 +166,7 @@ class Responder:
         category = entities.get("category")
         season = entities.get("season")
 
-        att = None
-        if att_name:
-            for a in self.retriever.attractions:
-                if a["name"] == att_name:
-                    att = a
-                    break
+        att = self.retriever.get_by_name(att_name) if att_name else None
 
         answer_parts = []
         answer_info = {}
@@ -205,9 +237,12 @@ class Responder:
 
         else:
             yield ("status", "🔎 正在检索相关景点...")
-            results = self.retriever.search(query, top_k=6)
+            results = self.retriever.search(query, top_k=8)
 
-            if results and results[0][1] > 0.12:
+            # 概念查询（看海/爬山/避暑等）→ 直接显示推荐列表
+            is_concept = query.strip().lower() in QUERY_EXPANSIONS
+
+            if results and results[0][1] > 0.12 and not is_concept:
                 top_att = results[0][0]
                 answer_info["type"] = "single"
                 answer_info["attraction_id"] = top_att["id"]
@@ -225,8 +260,12 @@ class Responder:
                 yield ("content", "\n\n".join(answer_parts))
             elif results:
                 answer_info["type"] = "search_list"
-                answer_parts.append("### 🏞️ 为你推荐以下景点\n")
-                for i, (a, s) in enumerate(results[:6], 1):
+                answer_info["top_names"] = [a["name"] for a, _ in results[:4]]
+                if is_concept:
+                    answer_parts.append(f"### 🎯 「{query}」相关景点推荐\n")
+                else:
+                    answer_parts.append("### 🏞️ 为你推荐以下景点\n")
+                for i, (a, s) in enumerate(results[:8], 1):
                     answer_parts.append(self._format_list_item(i, a))
                     answer_parts.append("")
                 yield ("content", "\n\n".join(answer_parts))
@@ -256,6 +295,7 @@ class Responder:
         # 生成跟进问题
         followups = self._generate_context_followups(answer_info)
         yield ("followups", followups)
+        yield ("answer_info", answer_info)
 
         # 更新上下文
         self.context.update(entities, answer_info)
@@ -274,126 +314,24 @@ class Responder:
             "followups": followups,
         }
 
-    def _build_answer(self, query: str, entities: dict) -> dict:
-        """生成回答"""
-        scenario = entities.get("scenario", "general")
-        att_name = entities.get("attraction_name")
-        province = entities.get("province")
-        category = entities.get("category")
-        season = entities.get("season")
+    def generate(self, query: str, entities: dict) -> dict:
+        """生成回答（非流式，兼容旧接口）"""
+        if self.use_llm:
+            return self._llm_answer(query, entities)
 
-        att = None
-        if att_name:
-            for a in self.retriever.attractions:
-                if a["name"] == att_name:
-                    att = a
-                    break
-
-        answer_parts = []
+        content_parts = []
         answer_info = {}
-
-        if att:
-            # ---- 单景点场景回答 ----
-            answer_info["type"] = "single"
-            answer_info["attraction_id"] = att["id"]
-            answer_info["attraction_name"] = att["name"]
-            answer_info["province"] = att["province"]
-            answer_info["category"] = att["category"]
-
-            label, css = SCENARIO_LABELS.get(scenario, SCENARIO_LABELS["general"])
-            answer_parts.append(f"### {att['name']}")
-            answer_parts.append(self._format_short(att))
-            answer_parts.append("")
-            answer_parts.append(f'<span class="scenario-badge {css}">{label}</span>')
-
-            content = self._get_scenario_content(att, scenario, season)
-            answer_parts.append(content)
-            answer_info["scenario"] = scenario
-
-        elif category and not province:
-            # ---- 按分类查询 ----
-            answer_info["type"] = "category_list"
-            answer_info["category"] = category
-            candidates = self.retriever.get_by_category(category)
-
-            if season:
-                candidates = [a for a in candidates
-                              if season in a.get("best_season", "")]
-                answer_parts.append(f"### 🌤️ 适合{season}的{category}景点推荐\n")
-            else:
-                answer_parts.append(f"### 📂 {category}景点推荐\n")
-
-            candidates.sort(key=lambda x: x.get("rating", 0), reverse=True)
-            for i, a in enumerate(candidates[:6], 1):
-                answer_parts.append(self._format_list_item(i, a))
-                answer_parts.append("")
-
-            answer_info["province"] = candidates[0]["province"] if candidates else None
-            answer_info["category"] = category
-
-        elif province:
-            # ---- 按省份查询 ----
-            answer_info["type"] = "province_list"
-            answer_info["province"] = province
-            candidates = self.retriever.get_by_province(province)
-
-            if category:
-                candidates = [a for a in candidates if a["category"] == category]
-            if season:
-                candidates = [a for a in candidates
-                              if season in a.get("best_season", "")]
-
-            candidates.sort(key=lambda x: x.get("rating", 0), reverse=True)
-            answer_parts.append(f"### 🗺️ {province}景点推荐\n")
-
-            for i, a in enumerate(candidates[:6], 1):
-                answer_parts.append(self._format_list_item(i, a))
-                answer_parts.append("")
-
-        else:
-            # ---- 自由检索 ----
-            results = self.retriever.search(query, top_k=6)
-
-            if results and results[0][1] > 0.12:
-                # 高匹配度 -> 当作单景点
-                top_att = results[0][0]
-                answer_info["type"] = "single"
-                answer_info["attraction_id"] = top_att["id"]
-                answer_info["attraction_name"] = top_att["name"]
-                answer_info["province"] = top_att["province"]
-                answer_info["category"] = top_att["category"]
-
-                label, css = SCENARIO_LABELS.get(scenario, SCENARIO_LABELS["general"])
-                answer_parts.append(f"### {top_att['name']}")
-                answer_parts.append(self._format_short(top_att))
-                answer_parts.append("")
-                answer_parts.append(f'<span class="scenario-badge {css}">{label}</span>')
-                answer_parts.append(self._get_scenario_content(top_att, scenario, season))
-                answer_info["scenario"] = scenario
-            elif results:
-                # 列表推荐
-                answer_info["type"] = "search_list"
-                answer_parts.append("### 🏞️ 为你推荐以下景点\n")
-                for i, (a, s) in enumerate(results[:6], 1):
-                    answer_parts.append(self._format_list_item(i, a))
-                    answer_parts.append("")
-            else:
-                answer_info["type"] = "no_result"
-                answer_parts.append("### 😅 抱歉")
-                answer_parts.append("没有找到匹配的景点信息，请换个关键词试试。\n")
-                answer_parts.append("💡 **试试这些关键词：**")
-                answer_parts.append("- 景点名称：故宫、黄山、九寨沟、丽江...")
-                answer_parts.append("- 省份/城市：北京有什么好玩的、成都美食...")
-                answer_parts.append("- 场景：避暑、爬山、看海、古镇、美食...")
-
-        # 生成跟进问题
-        followups = self._generate_context_followups(answer_info)
-
-        # 更新上下文
-        self.context.update(entities, answer_info)
+        followups = []
+        for chunk_type, chunk_content in self.generate_stream(query, entities):
+            if chunk_type == "content":
+                content_parts.append(chunk_content)
+            elif chunk_type == "followups":
+                followups = chunk_content
+            elif chunk_type == "answer_info":
+                answer_info = chunk_content
 
         return {
-            "answer": "\n\n".join(answer_parts),
+            "answer": "\n\n".join(content_parts) if content_parts else "暂无匹配信息",
             "answer_info": answer_info,
             "followups": followups,
             "context": self.context.to_dict(),
@@ -422,15 +360,15 @@ class Responder:
             if att.get("culture"):
                 parts.append("")
                 parts.append(f"**🎭 文化特色**")
-                parts.append(att["culture"][:150])
+                parts.append(att["culture"][:250])
             if att.get("food"):
                 parts.append("")
                 parts.append(f"**🍜 美食推荐**")
-                parts.append(att["food"][:150])
+                parts.append(att["food"])
             if att.get("transport"):
                 parts.append("")
                 parts.append(f"**🚗 交通住宿**")
-                parts.append(att["transport"][:150])
+                parts.append(att["transport"])
             return "\n".join(parts)
 
         if season:
@@ -471,11 +409,7 @@ class Responder:
                 questions.append(f"{name}和{prev_att}哪个更值得去？")
 
             # 关联景点推荐
-            att = None
-            for a in self.retriever.attractions:
-                if a["name"] == name:
-                    att = a
-                    break
+            att = self.retriever.get_by_name(name)
             if att:
                 related = self.retriever.get_related(att, top_n=3)
                 for r in related[:2]:
@@ -520,22 +454,29 @@ class Responder:
             questions.append("有哪些免费的景点推荐？")
 
         elif qtype == "search_list":
-            questions = [
-                "这些景点有哪些必去的？",
-                "推荐评分最高的景点",
-                "有哪些免费景点？",
-                "适合带孩子去的景点推荐",
-            ]
+            # 从历史中获取搜索结果的景点名，生成具体跟进问题
+            top_names = []
+            for h in reversed(ctx.history):
+                ai = h.get("answer_info", {})
+                if ai.get("type") == "search_list" and ai.get("top_names"):
+                    top_names = ai["top_names"]
+                    break
+            if top_names:
+                questions = [f"{n}有什么好玩的？" for n in top_names[:3]]
+                questions.append("这些景点哪个最值得去？")
+            else:
+                questions = [
+                    "这些景点有哪些必去的？",
+                    "推荐评分最高的景点",
+                    "有哪些免费景点？",
+                    "适合带孩子去的景点推荐",
+                ]
 
         return questions[:4]
 
     def get_related_questions(self, att_name: str, scenario: str = None) -> list:
         """获取关联景点推荐问题"""
-        att = None
-        for a in self.retriever.attractions:
-            if a["name"] == att_name:
-                att = a
-                break
+        att = self.retriever.get_by_name(att_name)
         if not att:
             return []
 

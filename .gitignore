@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 *.pyo
+*.bak
+*.tmp
 .env
 error.log
 .DS_Store
@@ -9,5 +11,6 @@ dist/
 build/
 data/cache/
 data/favorites.json
+data/chat_history.json
+data/search_counts.json
 scripts/_names*.txt
-retriever.py

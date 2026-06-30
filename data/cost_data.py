@@ -63,9 +63,9 @@ def estimate_trip_cost(province: str, days: int, category: str = None) -> dict:
         "住宿": (accommodation[0] * days, accommodation[1] * days),
         "餐饮": (food[0] * days, food[1] * days),
         "交通": (transport[0] * days, transport[1] * days),
-        "门票": (ticket_range[0], ticket_range[1] * days),
+        "门票": (ticket_range[0] * days, ticket_range[1] * days),
         "总计": (
-            accommodation[0] * days + food[0] * days + transport[0] * days + ticket_range[0],
+            accommodation[0] * days + food[0] * days + transport[0] * days + ticket_range[0] * days,
             accommodation[1] * days + food[1] * days + transport[1] * days + ticket_range[1] * days,
         ),
     }
