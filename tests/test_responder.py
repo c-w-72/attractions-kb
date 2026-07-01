@@ -97,7 +97,8 @@ class TestFreeSearch:
     def test_search_no_result(self, responder):
         entities = {"scenario": "general"}
         result = responder.generate("zzznotexist", entities)
-        assert "抱歉" in result["answer"]
+        # 无精确匹配时返回推荐景点，应有内容
+        assert len(result["answer"]) > 50
 
 
 class TestStreaming:
@@ -119,9 +120,10 @@ class TestStreaming:
     def test_stream_no_match(self, responder):
         entities = {"scenario": "general"}
         parts = list(responder.generate_stream("zzznotexist", entities))
+        # 无精确匹配时返回推荐景点，应有内容
         found = False
         for t, c in parts:
-            if t == "content" and "抱歉" in c:
+            if t == "content" and len(c) > 50:
                 found = True
         assert found
 

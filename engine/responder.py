@@ -159,7 +159,16 @@ class Responder:
     def generate_stream(self, query: str, entities: dict):
         """生成回答（流式，逐段 yield）"""
         yield ("status", "🔍 正在分析你的问题...")
+        try:
+            yield from self._generate_stream_inner(query, entities)
+        except Exception as e:
+            logger.exception("generate_stream 异常: %s", e)
+            yield ("content", "### 😅 抱歉\n处理你的问题时出现异常，请稍后重试或换个问法。")
+            yield ("followups", [])
+            yield ("answer_info", {})
 
+    def _generate_stream_inner(self, query: str, entities: dict):
+        """生成回答内部逻辑（实际处理）"""
         scenario = entities.get("scenario", "general")
         att_name = entities.get("attraction_name")
         province = entities.get("province")

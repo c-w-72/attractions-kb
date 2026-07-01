@@ -2,7 +2,7 @@
 import random
 import datetime
 import streamlit as st
-from data.persistence import load_search_counts, save_search_counts
+from data.persistence import load_search_counts, save_search_counts, load_search_history, save_search_history
 from ui.components import ask_question, display_attraction_card, mini_card, display_skeleton
 
 
@@ -10,7 +10,7 @@ def render_search_page():
     st.markdown('<div class="main-header">🔍 景点搜索</div>', unsafe_allow_html=True)
 
     if "search_history" not in st.session_state:
-        st.session_state.search_history = []
+        st.session_state.search_history = load_search_history()
     if "search_counts" not in st.session_state:
         st.session_state.search_counts = load_search_counts()
 
@@ -70,9 +70,10 @@ def render_search_page():
         min_rating = st.slider("评分", 0.0, 5.0, 0.0, 0.5, label_visibility="collapsed")
 
     if query:
-        # 防抖：仅当查询词变化时才重新搜索
-        if st.session_state.get("_last_query") != query:
-            st.session_state._last_query = query
+        # 防抖：仅当查询词或筛选条件变化时才重新搜索
+        search_key = (query, province_filter, category_filter, min_rating, use_hybrid)
+        if st.session_state.get("_last_search_key") != search_key:
+            st.session_state._last_search_key = search_key
             st.session_state._last_results = None
 
         province = province_filter if province_filter != "全部" else None
@@ -100,23 +101,75 @@ def render_search_page():
             results = st.session_state._last_results
 
         if results:
-            if query not in st.session_state.search_history:
-                st.session_state.search_history.append(query)
-            for att, score in results:
-                name = att["name"]
-                st.session_state.search_counts[name] = st.session_state.search_counts.get(name, 0) + 1
-            save_search_counts(st.session_state.search_counts)
+            if st.session_state.get("_last_counted_query") != query:
+                st.session_state._last_counted_query = query
+                if query not in st.session_state.search_history:
+                    st.session_state.search_history.append(query)
+                    save_search_history(st.session_state.search_history)
+                for att, score in results:
+                    name = att["name"]
+                    st.session_state.search_counts[name] = st.session_state.search_counts.get(name, 0) + 1
+                # 每 5 次搜索写一次磁盘，避免频繁 I/O
+                if "search_count_io" not in st.session_state:
+                    st.session_state.search_count_io = 0
+                st.session_state.search_count_io += 1
+                if st.session_state.search_count_io % 5 == 0:
+                    save_search_counts(st.session_state.search_counts)
 
             st.success(f"找到 {len(results)} 个相关景点")
+
+            # 导出搜索结果
+            export_text = "\n".join(
+                f"{i+1}. {a['name']}（{a['province']} {a.get('city','')} | {a['category']} | ⭐{a.get('rating','')} | 🎫{a.get('ticket','')}）\n   📝 {a.get('description','')[:100]}"
+                for i, (a, s) in enumerate(results)
+            )
+            st.download_button("📥 导出结果", data=export_text,
+                               file_name=f"搜索结果_{query}.txt", mime="text/plain",
+                               use_container_width=False)
+
+            per_page = st.selectbox("每页显示", [10, 20, 50], index=1, key="search_per_page")
+            total_pages = max(1, (len(results) + per_page - 1) // per_page)
+            page_key = "search_page"
+            if page_key not in st.session_state:
+                st.session_state[page_key] = 1
+            st.session_state[page_key] = min(st.session_state[page_key], total_pages)
+            current_page = st.session_state[page_key]
+
+            if total_pages > 1:
+                nav_cols = st.columns([4, 1, 1, 1, 4])
+                with nav_cols[1]:
+                    if st.button("◀ 上一页", disabled=current_page <= 1, use_container_width=True):
+                        st.session_state[page_key] = current_page - 1
+                        st.rerun()
+                with nav_cols[2]:
+                    st.markdown(f"<div style='text-align:center;padding:4px 0'>{current_page}/{total_pages}</div>",
+                                unsafe_allow_html=True)
+                with nav_cols[3]:
+                    if st.button("下一页 ▶", disabled=current_page >= total_pages, use_container_width=True):
+                        st.session_state[page_key] = current_page + 1
+                        st.rerun()
+                # 翻页后自动滚动到结果区域
+                st.markdown(
+                    '<div id="search-top"></div>'
+                    '<script>'
+                    'var el=document.getElementById("search-top");'
+                    'if(el)el.scrollIntoView({behavior:"smooth",block:"start"});'
+                    '</script>',
+                    unsafe_allow_html=True,
+                )
+
+            start_idx = (current_page - 1) * per_page
+            end_idx = min(start_idx + per_page, len(results))
+            page_results = results[start_idx:end_idx]
 
             compact = st.toggle("📋 紧凑模式", value=True, key="search_compact_toggle")
             if compact:
                 cols = st.columns(2)
-                for i, (att, score) in enumerate(results):
+                for i, (att, score) in enumerate(page_results):
                     with cols[i % 2]:
-                        mini_card(att)
+                        mini_card(att, show_fav=True)
             else:
-                for att, score in results:
+                for att, score in page_results:
                     display_attraction_card(att, score, highlight=query)
         else:
             pinyin_results = retriever.fuzzy_search(query, top_k=6)
@@ -140,9 +193,30 @@ def render_province_page():
     provinces = retriever.get_provinces()
     province = st.selectbox("选择省份", provinces, key="province_selectbox")
     if province:
-        st.markdown(f"### 📍 {province}（{len(retriever.get_by_province(province))}个景点）")
-        for att in retriever.get_by_province(province):
-            display_attraction_card(att)
+        atts = retriever.get_by_province(province)
+        st.markdown(f"### 📍 {province}（{len(atts)}个景点）")
+
+        search_within = st.text_input("🔍 在省内搜索", placeholder="输入关键词筛选景点...",
+                                      label_visibility="collapsed", key="prov_search")
+        if search_within:
+            ql = search_within.lower()
+            atts = [a for a in atts if ql in a["name"].lower() or
+                    ql in a.get("description", "").lower() or
+                    ql in a.get("highlights", "").lower()]
+            if not atts:
+                st.info(f"在 {province} 内未找到匹配「{search_within}」的景点")
+                return
+            st.caption(f"找到 {len(atts)} 个匹配景点")
+
+        show_details = st.toggle("📋 显示完整详情", value=False, key="prov_detail_toggle")
+        if show_details:
+            for att in atts:
+                display_attraction_card(att)
+        else:
+            cols = st.columns(2)
+            for i, att in enumerate(atts):
+                with cols[i % 2]:
+                    mini_card(att, show_fav=True)
 
 
 def render_category_page():
@@ -154,7 +228,7 @@ def render_category_page():
             grid_cols = st.columns(2)
             for idx, att in enumerate(cat_attrs):
                 with grid_cols[idx % 2]:
-                    mini_card(att)
+                    mini_card(att, show_fav=True)
 
 
 def render_map_page():
@@ -200,7 +274,25 @@ def render_map_page():
             icon=folium.Icon(color=color[1:] if color.startswith("#") else "blue", icon="info-sign"),
         ).add_to(marker_cluster)
 
-    st_folium(m, width=1100, height=600)
+    map_data = st_folium(m, width=1100, height=600, key="attraction_map")
+
+    # 点击标记后显示操作按钮
+    if map_data and map_data.get("last_object_clicked"):
+        lat, lon = map_data["last_object_clicked"]
+        # 查找被点击的景点
+        clicked_att = None
+        for a in mapped:
+            if a.get("location") and abs(a["location"][1] - lat) < 0.01 and abs(a["location"][0] - lon) < 0.01:
+                clicked_att = a
+                break
+        if clicked_att:
+            st.markdown(f"**📍 当前选中：{clicked_att['name']}**")
+            col_a, col_b = st.columns([1, 6])
+            with col_a:
+                if st.button("🔍 查看详情", key="map_view_detail", use_container_width=True):
+                    ask_question(f"介绍一下{clicked_att['name']}")
+            with col_b:
+                st.caption(f"{clicked_att['province']} {clicked_att.get('city','')} | {clicked_att['category']}")
 
     legend_cols = st.columns(5)
     for i, (cat, color) in enumerate(cat_colors.items()):
@@ -219,8 +311,7 @@ def render_random_page():
     with col1:
         n = st.selectbox("数量", [3, 5, 8, 10], index=1)
     with col2:
-        if st.button("🎲 换一批", use_container_width=True):
-            st.session_state.rand_key = st.session_state.get("rand_key", 0) + 1
+        st.button("🎲 换一批", use_container_width=True)
 
     for att in retriever.random_attractions(n):
         display_attraction_card(att)
@@ -234,21 +325,25 @@ def render_seasonal_page():
         season_cn = "🌸 春季（3-5月）"
         badge = "season-badge-spring"
         months = [3, 4, 5]
+        next_months = [6, 7, 8]
         next_cn = "☀️ 夏季（6-8月）"
     elif 6 <= month <= 8:
         season_cn = "☀️ 夏季（6-8月）"
         badge = "season-badge-summer"
         months = [6, 7, 8]
+        next_months = [9, 10, 11]
         next_cn = "🍂 秋季（9-11月）"
     elif 9 <= month <= 11:
         season_cn = "🍂 秋季（9-11月）"
         badge = "season-badge-autumn"
         months = [9, 10, 11]
+        next_months = [12, 1, 2]
         next_cn = "❄️ 冬季（12-2月）"
     else:
         season_cn = "❄️ 冬季（12-2月）"
         badge = "season-badge-winter"
         months = [12, 1, 2]
+        next_months = [3, 4, 5]
         next_cn = "🌸 春季（3-5月）"
 
     st.markdown(f'<span class="season-badge {badge}">{season_cn}</span>', unsafe_allow_html=True)
@@ -272,8 +367,9 @@ def render_seasonal_page():
             display_attraction_card(att)
     with tab2:
         retriever = st.session_state.retriever
-        next_matched = [a for a in retriever.attractions if match_season(a.get("best_season", ""))]
+        next_matched = [a for a in retriever.attractions
+                        if a.get("best_season") and any(str(m) in a["best_season"] for m in next_months)]
         random.shuffle(next_matched)
-        st.info(f"主下个季节预热 — 推荐 {len(next_matched[:10])} 个景点")
+        st.info(f"🌤️ 下个季节预热 — 推荐 {len(next_matched[:10])} 个景点")
         for att in next_matched[:10]:
             display_attraction_card(att)

@@ -13,10 +13,23 @@ logger = logging.getLogger("ui.qa")
 def render_qa_page():
     st.markdown('<div class="main-header">💬 智能问答</div>', unsafe_allow_html=True)
 
-    for msg in st.session_state.messages:
-        avatar = "🏯" if msg["role"] == "assistant" else "👤"
-        with st.chat_message(msg["role"], avatar=avatar):
-            st.markdown(msg["content"])
+    msgs = st.session_state.messages
+    max_visible = 30
+    if len(msgs) > max_visible:
+        with st.expander(f"📜 查看更早的消息（共 {len(msgs)} 条）", expanded=False):
+            for msg in msgs[:-max_visible]:
+                avatar = "🏯" if msg["role"] == "assistant" else "👤"
+                with st.chat_message(msg["role"], avatar=avatar):
+                    st.markdown(msg["content"])
+        for msg in msgs[-max_visible:]:
+            avatar = "🏯" if msg["role"] == "assistant" else "👤"
+            with st.chat_message(msg["role"], avatar=avatar):
+                st.markdown(msg["content"])
+    else:
+        for msg in msgs:
+            avatar = "🏯" if msg["role"] == "assistant" else "👤"
+            with st.chat_message(msg["role"], avatar=avatar):
+                st.markdown(msg["content"])
 
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         last_query = st.session_state.messages[-1]["content"]
@@ -94,7 +107,7 @@ def render_qa_page():
 
     if len(st.session_state.messages) > 1:
         st.markdown("---")
-        cols = st.columns([1, 1, 6])
+        cols = st.columns([1, 1, 1, 5])
         with cols[0]:
             if st.button("🗑️ 清除对话", use_container_width=True):
                 st.session_state.messages = []
@@ -107,3 +120,11 @@ def render_qa_page():
                 rand_att = random.choice(st.session_state.retriever.attractions)
                 add_message("user", f"介绍一下{rand_att['name']}")
                 st.rerun()
+        with cols[2]:
+            export_md = "\n\n".join(
+                f"**{'🏯 助手' if m['role'] == 'assistant' else '👤 我'}**\n\n{m['content']}"
+                for m in st.session_state.messages
+            )
+            st.download_button("📤 导出对话", data=export_md,
+                               file_name="旅游问答记录.md", mime="text/markdown",
+                               use_container_width=True)

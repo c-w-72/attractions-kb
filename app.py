@@ -22,6 +22,15 @@ from engine.intent import IntentEngine
 from engine.responder import Responder
 from data.persistence import load_favorites, load_chat_history, save_chat_message, clear_chat_history
 from ui.styles import BASE_CSS, DARK_CSS, LIGHT_CSS, COMMON_CSS
+
+DARK_OVERRIDES = '''
+    .highlight { background: #8b6f00; color: #fff; }
+    .season-badge-spring { background: #1b3d1b; color: #a5d6a7; border-color: #2e7d32; }
+    .season-badge-summer { background: #3d2e1b; color: #ffcc80; border-color: #e65100; }
+    .season-badge-autumn { background: #3d1b1b; color: #ef9a9a; border-color: #c62828; }
+    .season-badge-winter { background: #1b2d3d; color: #90caf9; border-color: #0d47a1; }
+    div[style*="background:#fff"] > b { color: #e0e0e0; }
+'''
 from ui.pages import PAGE_ROUTER
 
 st.set_page_config(
@@ -93,7 +102,21 @@ if "llm_enabled" not in st.session_state:
     st.session_state.llm_enabled = False
 
 theme_css = DARK_CSS if st.session_state.dark_mode else LIGHT_CSS
-st.markdown(f"<style>{BASE_CSS}{theme_css}{COMMON_CSS}</style>", unsafe_allow_html=True)
+
+@st.cache_data
+def _get_css(theme: str) -> str:
+    return f"<style>{BASE_CSS}{theme}{COMMON_CSS}</style>"
+
+
+@st.cache_data
+def _get_dark_overrides() -> str:
+    return f"<style>{DARK_OVERRIDES}</style>"
+
+
+st.markdown(_get_css(theme_css), unsafe_allow_html=True)
+
+if st.session_state.dark_mode:
+    st.markdown(_get_dark_overrides(), unsafe_allow_html=True)
 
 # 键盘快捷键
 st.markdown("""
@@ -134,6 +157,11 @@ with st.sidebar:
             is_active = (selected == item)
             btn_type = "primary" if is_active else "secondary"
             if st.button(item, key=f"nav_{item}", use_container_width=True, type=btn_type):
+                old_page = st.session_state.get("nav_selected", "")
+                if old_page != item:
+                    # 页面切换时清理跨页面缓存 key（保留搜索结果）
+                    for k in ["fav_select_all", "fav_selected", "fav_page"]:
+                        st.session_state.pop(k, None)
                 st.session_state.nav_selected = item
                 st.rerun()
     page = st.session_state.get("nav_selected", "💬 智能问答")

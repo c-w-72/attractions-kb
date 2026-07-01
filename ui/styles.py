@@ -88,5 +88,20 @@ COMMON_CSS = '''
         .stButton button { font-size: 0.75rem; padding: 0.2rem 0.4rem; }
         .tag { font-size: 0.7rem; padding: 1px 6px; }
         .attraction-card { padding: 0.8rem; }
+        .compare-table { font-size: 0.8rem; }
+        .compare-table th, .compare-table td { padding: 4px; }
+        section[data-testid="stSidebar"] { width: 200px !important; min-width: 200px !important; }
+        section[data-testid="stSidebar"] .stButton button { font-size: 0.7rem; }
+        .main-header { font-size: 1.2rem !important; }
+        .sub-header { font-size: 0.95rem !important; }
+        .mini-card { font-size: 0.8rem; }
     }
+    .compare-wrapper::-webkit-scrollbar { height: 6px; }
+    .compare-wrapper::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+    .mini-card {
+        padding: 8px 12px; border-left: 3px solid #1f77b4; margin: 4px 0;
+        background: var(--card-bg); border-radius: 0 6px 6px 6px;
+    }
+    .mini-card b { color: var(--card-title); }
+    .mini-card-text { font-size: 0.9rem; color: var(--sub-text); }
 '''

@@ -1,7 +1,8 @@
 """工具类页面：对比、行程规划、收藏、费用估算、数据概览、热门排行"""
+import html
 import streamlit as st
 from engine.itinerary import generate_itinerary
-from data.persistence import load_favorites, toggle_favorite, save_note
+from data.persistence import load_favorites, toggle_favorite, save_note, batch_remove_favorites
 from data.cost_data import estimate_trip_cost, COST_ESTIMATES
 from ui.components import (
     ask_question, display_attraction_card, display_cost_estimate,
@@ -34,7 +35,8 @@ def render_compare_page():
         ("交通住宿", "transport"), ("文化特色", "culture"), ("美食特产", "food"),
     ]
 
-    html = '<table class="compare-table"><tr><th style="width:100px">对比项</th>'
+    html = '<div class="compare-wrapper" style="overflow-x:auto;max-width:100%">'
+    html += '<table class="compare-table"><tr><th style="width:100px">对比项</th>'
     for att in atts:
         html += f"<th>{att['name']}</th>"
     html += "</tr>"
@@ -46,7 +48,7 @@ def render_compare_page():
                 val = f"{'⭐' * int(round(val or 0))} {val}"
             html += f"<td>{str(val)[:200]}</td>"
         html += "</tr>"
-    html += "</table>"
+    html += "</table></div>"
     st.markdown(html, unsafe_allow_html=True)
 
 
@@ -83,12 +85,15 @@ def render_itinerary_page():
                                    file_name=f"{dest}{days}日游.md", mime="text/markdown",
                                    use_container_width=True)
             with export_col3:
-                html_body = plan["itinerary"].replace("st.markdown(", "").replace("unsafe_allow_html=True", "").replace('"""', " ")
+                body = html.escape(plan["itinerary"])
+                # 基本 markdown → HTML 转换（支持 ###, **, ---, 换行）
+                body = body.replace("### ", "<h3>").replace("\n", "<br>")
+                body = body.replace("**", "<b>", 1)  # 不完美但比 replace() 安全
                 html_out = '<html><head><meta charset="utf-8"><style>'
-                html_out += 'body{font-family:sans-serif;max-width:800px;margin:0 auto;padding:20px}'
-                html_out += 'h1{color:#1f77b4}h2{color:#2c3e50}.day-card{border:1px solid #ddd;border-radius:8px;padding:12px;margin:10px 0}'
+                html_out += 'body{font-family:sans-serif;max-width:800px;margin:0 auto;padding:20px;line-height:1.8}'
+                html_out += 'h3{color:#1f77b4}br{content:"";display:block;margin:4px 0}'
                 html_out += '</style></head><body>'
-                html_out += html_body + '</body></html>'
+                html_out += body + '</body></html>'
                 st.download_button("🖨️ HTML导出", data=html_out,
                                    file_name=f"{dest}{days}日游.html", mime="text/html",
                                    use_container_width=True)
@@ -119,35 +124,106 @@ def render_favorites_page():
         st.info("还没有收藏景点，浏览景点时点击 ⭐ 收藏即可添加")
         return
 
-    st.markdown(f"共收藏 **{len(favs)}** 个景点\n")
+    st.markdown(f"共收藏 **{len(favs)}** 个景点")
+
+    # 批量操作栏
+    if "fav_select_all" not in st.session_state:
+        st.session_state.fav_select_all = False
+    if "fav_selected" not in st.session_state:
+        st.session_state.fav_selected = set()
+
+    batch_col1, batch_col2, batch_col3 = st.columns([1, 1, 6])
+    with batch_col1:
+        page_favs = page_names  # 当前页的收藏
+        all_selected = st.checkbox("全选", value=st.session_state.fav_select_all,
+                                   key="fav_select_all_checkbox",
+                                   help="选择/取消当前页的全部收藏")
+        if all_selected != st.session_state.fav_select_all:
+            st.session_state.fav_select_all = all_selected
+            if all_selected:
+                st.session_state.fav_selected.update(page_favs)
+            else:
+                st.session_state.fav_selected.difference_update(page_favs)
+            st.rerun()
+    with batch_col2:
+        if st.button("🗑️ 批量删除", type="primary", use_container_width=True,
+                     disabled=not st.session_state.fav_selected):
+            if st.session_state.fav_selected:
+                batch_remove_favorites(list(st.session_state.fav_selected))
+                _invalidate_favorites()
+                st.session_state.fav_selected = set()
+                st.session_state.fav_select_all = False
+                st.rerun()
+    with batch_col3:
+        if st.session_state.fav_selected:
+            st.caption(f"已选 {len(st.session_state.fav_selected)} 项")
 
     retriever = st.session_state.retriever
-    for name in favs:
+    # 分页显示收藏，每页 20 条
+    per_page = 20
+    total_pages = max(1, (len(favs) + per_page - 1) // per_page)
+    fp_key = "fav_page"
+    if fp_key not in st.session_state:
+        st.session_state[fp_key] = 1
+    st.session_state[fp_key] = min(st.session_state[fp_key], total_pages)
+    fp = st.session_state[fp_key]
+    start_idx = (fp - 1) * per_page
+    end_idx = min(start_idx + per_page, len(favs))
+    page_names = favs[start_idx:end_idx]
+
+    # 页数导航
+    if total_pages > 1:
+        nav_cols = st.columns([5, 1, 1, 1, 5])
+        with nav_cols[1]:
+            if st.button("◀", disabled=fp <= 1, use_container_width=True):
+                st.session_state[fp_key] = fp - 1
+                st.rerun()
+        with nav_cols[2]:
+            st.markdown(f"<div style='text-align:center'>{fp}/{total_pages}</div>", unsafe_allow_html=True)
+        with nav_cols[3]:
+            if st.button("▶", disabled=fp >= total_pages, use_container_width=True):
+                st.session_state[fp_key] = fp + 1
+                st.rerun()
+
+    for name in page_names:
         att = retriever.get_by_name(name)
         if not att:
             continue
 
-        with st.expander(f"⭐ {name} — {att['province']} {att.get('city', '')}", expanded=True):
-            col1, col2 = st.columns([3, 1])
+        selected = name in st.session_state.fav_selected
+        col_sel, col_main = st.columns([1, 20])
+        with col_sel:
+            checked = st.checkbox("", value=selected, key=f"sel_{name}",
+                                  label_visibility="collapsed")
+            if checked != selected:
+                if checked:
+                    st.session_state.fav_selected.add(name)
+                else:
+                    st.session_state.fav_selected.discard(name)
+                    st.session_state.fav_select_all = False
+                st.rerun()
 
-            with col1:
-                note = notes.get(name, "")
-                new_note = st.text_area("📝 旅行笔记", value=note,
-                                        placeholder="添加你的旅行笔记...",
-                                        key=f"note_{name}")
-                if new_note != note:
-                    save_note(name, new_note)
-
-            with col2:
-                if st.button("🗑️ 取消收藏", key=f"unfav_{name}", use_container_width=True):
-                    toggle_favorite(name)
-                    _invalidate_favorites()
-                    st.rerun()
-                if st.button("💬 问AI", key=f"fav_q_{name}", use_container_width=True):
-                    ask_question(f"介绍一下{name}")
-
-            if note:
-                st.markdown(f"**📝 笔记：** {note}")
+        with col_main:
+            show_note_key = f"show_note_{name}"
+            note = notes.get(name, "")
+            with st.expander(f"⭐ {name} — {att['province']} {att.get('city', '')}", expanded=False):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    new_note = st.text_area("📝 旅行笔记", value=note,
+                                            placeholder="添加你的旅行笔记...",
+                                            key=f"note_{name}")
+                    if new_note != note:
+                        save_note(name, new_note)
+                with col2:
+                    if st.button("🗑️ 取消收藏", key=f"unfav_{name}", use_container_width=True):
+                        toggle_favorite(name)
+                        _invalidate_favorites()
+                        st.session_state.fav_selected.discard(name)
+                        st.rerun()
+                    if st.button("💬 问AI", key=f"fav_q_{name}", use_container_width=True):
+                        ask_question(f"介绍一下{name}")
+                if note:
+                    st.markdown(f"**📝 笔记：** {note}")
 
 
 def render_cost_page():
@@ -246,12 +322,12 @@ def render_rankings_page():
             for rank, att in enumerate(cold, 1):
                 stars = "⭐" * int(round(att.get("rating", 0) or 0))
                 st.markdown(f"**#{rank}** — {att['name']} {stars} {att.get('rating', '')}")
-                mini_card(att)
+                mini_card(att, show_fav=True)
         else:
             for rank, att in enumerate(top_hot, 1):
                 cnt = search_counts.get(att["name"], 0)
                 st.markdown(f"**#{rank}** — {att['name']}（{cnt}次搜索）")
-                mini_card(att)
+                mini_card(att, show_fav=True)
 
     with tab2:
         by_rating = sorted(all_attrs, key=lambda a: a.get("rating", 0) or 0, reverse=True)[:20]

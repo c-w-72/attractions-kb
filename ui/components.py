@@ -150,6 +150,11 @@ def display_attraction_card(att, score=None, highlight=None):
             retriever = st.session_state.retriever
             if "nearby_cache" not in st.session_state:
                 st.session_state.nearby_cache = {}
+            elif len(st.session_state.nearby_cache) > 200:
+                # 限制缓存上限，淘汰最早的一半
+                keys = list(st.session_state.nearby_cache.keys())
+                for k in keys[:100]:
+                    del st.session_state.nearby_cache[k]
             cache_key = f"nearby_{att['id']}"
             if cache_key not in st.session_state.nearby_cache:
                 st.session_state.nearby_cache[cache_key] = get_nearby_attractions(retriever.attractions, att, top_n=5)
@@ -163,8 +168,17 @@ def display_attraction_card(att, score=None, highlight=None):
                 st.info("暂未发现附近景点（300km范围内）")
 
         with tabs[2]:
-            with st.spinner("搜索景点图片..."):
-                img_urls = fetch_images(att["name"], max_images=6)
+            if "img_cache" not in st.session_state:
+                st.session_state.img_cache = {}
+            elif len(st.session_state.img_cache) > 100:
+                keys = list(st.session_state.img_cache.keys())
+                for k in keys[:50]:
+                    del st.session_state.img_cache[k]
+            cache_key = f"img_{att['id']}"
+            if cache_key not in st.session_state.img_cache:
+                with st.spinner("搜索景点图片..."):
+                    st.session_state.img_cache[cache_key] = fetch_images(att["name"], max_images=6)
+            img_urls = st.session_state.img_cache[cache_key]
             if img_urls:
                 n = len(img_urls)
                 cols = st.columns(min(n, 3))
@@ -180,22 +194,42 @@ def display_attraction_card(att, score=None, highlight=None):
                 st.info("暂未找到相关图片")
 
 
-def mini_card(att):
+def mini_card(att, show_fav=False):
     stars = "⭐" * int(round(att.get("rating", 0) or 0))
     fav_set = _get_favorites_set()
     fav = att["name"] in fav_set
     fav_icon = " ⭐" if fav else ""
-    st.markdown(
-        f"""
-        <div style="padding:8px 12px;border-left:3px solid #1f77b4;margin:4px 0;
-                    background:#fff;border-radius:0 6px 6px 6px">
-            <b>{att['name']}{fav_icon}</b> {stars} {att.get('rating', '')} —
-            {att['province']} {att.get('city', '')} | 🎫 {att.get('ticket', '')}
-            <br><span style="font-size:0.9rem;color:#666">{att.get('highlights', '')[:80]}</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+
+    if show_fav:
+        fav_label = "❤️" if fav else "🤍"
+        cols = st.columns([1, 20])
+        with cols[0]:
+            if st.button(fav_label, key=f"mfav_{att['id']}", help="收藏/取消"):
+                toggle_favorite(att["name"])
+                _invalidate_favorites()
+                st.rerun()
+        with cols[1]:
+            st.markdown(
+                f"""
+                <div class="mini-card">
+                    <b>{att['name']}{fav_icon}</b> {stars} {att.get('rating', '')} —
+                    {att['province']} {att.get('city', '')} | 🎫 {att.get('ticket', '')}
+                    <br><span class="mini-card-text">{att.get('highlights', '')[:80]}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown(
+            f"""
+            <div class="mini-card">
+                <b>{att['name']}{fav_icon}</b> {stars} {att.get('rating', '')} —
+                {att['province']} {att.get('city', '')} | 🎫 {att.get('ticket', '')}
+                <br><span class="mini-card-text">{att.get('highlights', '')[:80]}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def display_cost_estimate(cost: dict, people: int = 1):

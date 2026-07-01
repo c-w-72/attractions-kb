@@ -100,8 +100,31 @@ class AttractionRetriever:
             self._id_index[a["id"]] = a
 
     def _load_data(self) -> list:
+        import gzip
+        gz_path = self.data_path + ".gz"
+        if os.path.exists(gz_path):
+            try:
+                with gzip.open(gz_path, "rt", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self._validate_data(data)
+                    return data
+            except Exception:
+                pass
         with open(self.data_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            self._validate_data(data)
+            return data
+
+    def _validate_data(self, data: list):
+        """校验景点数据完整性"""
+        required = {"name", "province", "category"}
+        for i, att in enumerate(data):
+            missing = required - set(att.keys())
+            if missing:
+                name = att.get("name", f"index={i}")
+                logger.warning("景点 %s 缺少必要字段: %s", name, missing)
+        if not data:
+            logger.error("景点数据为空!")
 
     def _get_tokenizer(self):
         """延迟加载 jieba 分词器"""
@@ -265,9 +288,9 @@ class AttractionRetriever:
         if progress_callback:
             progress_callback(100, "✅ 索引构建完成")
 
-        # 后台预计算拼音 + 预热缓存
-        self._precompute_pinyin()
-        self._warm_cache()
+        # 后台预计算拼音 + 预热缓存（不阻塞首页渲染）
+        threading.Thread(target=self._precompute_pinyin, daemon=True).start()
+        threading.Thread(target=self._warm_cache, daemon=True).start()
 
     def _warm_cache(self):
         """后台预热常用查询缓存"""
@@ -427,7 +450,7 @@ class AttractionRetriever:
             self._build_faiss_index()
             return True
         except Exception as e:
-                logger.debug("语义模型加载失败: %s", e)
+            logger.debug("语义模型加载失败: %s", e)
 
         return False
 
@@ -525,7 +548,10 @@ class AttractionRetriever:
 
     def _precompute_pinyin(self):
         """预计算所有景点的拼音并缓存到磁盘"""
-        if self._pinyin_cache:
+        if getattr(self, '_pinyin_ready', False):
+            return
+        if getattr(self, '_pinyin_busy', False):
+            # 后台正在计算中，前台不必重复计算
             return
 
         cache_path = os.path.join(CACHE_DIR, "pinyin_cache.pkl")
@@ -534,10 +560,13 @@ class AttractionRetriever:
                 with open(cache_path, "rb") as f:
                     self._pinyin_cache = pickle.load(f)
                 if len(self._pinyin_cache) == len(self.attractions):
+                    self._pinyin_ready = True
                     logger.info("从缓存加载拼音 (%d 个)", len(self._pinyin_cache))
                     return
             except Exception:
                 pass
+
+        self._pinyin_busy = True
 
         try:
             from pypinyin import pinyin, Style
@@ -552,6 +581,7 @@ class AttractionRetriever:
             try:
                 with open(cache_path, "wb") as f:
                     pickle.dump(self._pinyin_cache, f)
+                self._pinyin_ready = True
                 logger.info("拼音预计算完成并缓存 (%d 个)", len(self._pinyin_cache))
             except Exception as e:
                 logger.warning("拼音缓存写入失败: %s", e)
@@ -568,7 +598,9 @@ class AttractionRetriever:
 
         try:
             from pypinyin import pinyin, Style
-            self._precompute_pinyin()
+            # 后台拼音未就绪时不阻塞，直接计算查询词拼音并跳过未缓存景点
+            if not getattr(self, '_pinyin_ready', False):
+                self._precompute_pinyin()
             query_py = "".join([item[0] for item in pinyin(query, style=Style.NORMAL)]).lower()
 
             scored = []
