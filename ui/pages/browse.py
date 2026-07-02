@@ -3,7 +3,7 @@ import random
 import datetime
 import streamlit as st
 from data.persistence import load_search_counts, save_search_counts, load_search_history, save_search_history
-from ui.components import ask_question, display_attraction_card, mini_card, display_skeleton
+from ui.components import ask_question, mini_card, display_skeleton
 
 
 def render_search_page():
@@ -38,40 +38,58 @@ def render_search_page():
                         st.session_state.search_query_input = s
                         st.rerun()
 
-    if not query and st.session_state.search_history:
-        history = list(dict.fromkeys(st.session_state.search_history[-8:]))
-        st.markdown("##### 🔄 最近搜索")
-        hist_cols = st.columns(min(4, len(history)))
-        for i, h in enumerate(history):
-            with hist_cols[i % min(4, len(history))]:
-                if st.button(f"🔄 {h}", key=f"hist_{i}", use_container_width=True):
-                    st.session_state.search_query_input = h
+    if not query:
+        has_history = bool(st.session_state.search_history)
+        has_hot = any(c > 0 for _, c in st.session_state.search_counts.items()) if st.session_state.search_counts else False
+        if has_history or has_hot:
+            st.markdown("---")
+            if has_history:
+                history = list(dict.fromkeys(st.session_state.search_history[-8:]))
+                st.markdown("🔄 **最近搜索**")
+                hist_cols = st.columns(4)
+                for i, h in enumerate(history):
+                    with hist_cols[i % 4]:
+                        if st.button(f"🔄 {h}", key=f"hist_{i}", use_container_width=True):
+                            st.session_state.search_query_input = h
+                            st.rerun()
+            if has_hot:
+                hot_terms = sorted(st.session_state.search_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+                if hot_terms and hot_terms[0][1] > 0:
+                    if has_history:
+                        st.markdown("")
+                    st.markdown("🔥 **搜索热词**")
+                    tag_cols = st.columns(5)
+                    for i, (term, cnt) in enumerate(hot_terms):
+                        with tag_cols[i % 5]:
+                            if st.button(f"🔥 {term}", key=f"hotword_{i}", use_container_width=True):
+                                st.session_state.search_query_input = term
+                                st.rerun()
 
-        # 搜索热词标签云
-        search_counts = st.session_state.search_counts
-        hot_terms = sorted(search_counts.items(), key=lambda x: x[1], reverse=True)[:12]
-        if hot_terms and hot_terms[0][1] > 0:
-            st.markdown("##### 🔥 搜索热词")
-            tag_cols = st.columns(4)
-            for i, (term, cnt) in enumerate(hot_terms):
-                with tag_cols[i % 4]:
-                    if st.button(f"🔥 {term}", key=f"hotword_{i}", use_container_width=True):
-                        st.session_state.search_query_input = term
-                        st.rerun()
+        if not st.session_state.search_history:
+            st.markdown("##### 🔥 热门景点")
+            search_counts = st.session_state.search_counts
+            hot = sorted(retriever.attractions, key=lambda a: search_counts.get(a["name"], 0), reverse=True)[:8]
+            hot = [a for a in hot if search_counts.get(a["name"], 0) > 0]
+            if not hot:
+                hot = sorted(retriever.attractions, key=lambda a: a.get("rating", 0) or 0, reverse=True)[:8]
+            cols = st.columns(4)
+            for i, a in enumerate(hot[:8]):
+                with cols[i % 4]:
+                    if st.button(f"🔥 {a['name']}", key=f"hot_{i}", use_container_width=True):
+                        ask_question(f"介绍一下{a['name']}")
 
-    if not query and not st.session_state.search_history:
-        st.markdown("##### 🔥 热门景点")
-        search_counts = st.session_state.search_counts
-        hot = sorted(retriever.attractions, key=lambda a: search_counts.get(a["name"], 0), reverse=True)[:8]
-        hot = [a for a in hot if search_counts.get(a["name"], 0) > 0]
-        if not hot:
-            # 冷启动：按评分推荐
-            hot = sorted(retriever.attractions, key=lambda a: a.get("rating", 0) or 0, reverse=True)[:8]
-        cols = st.columns(4)
-        for i, a in enumerate(hot[:8]):
-            with cols[i % 4]:
-                if st.button(f"🔥 {a['name']}", key=f"hot_{i}", use_container_width=True):
-                    ask_question(f"介绍一下{a['name']}")
+        if not st.session_state.search_history:
+            st.markdown("##### 🔥 热门景点")
+            search_counts = st.session_state.search_counts
+            hot = sorted(retriever.attractions, key=lambda a: search_counts.get(a["name"], 0), reverse=True)[:8]
+            hot = [a for a in hot if search_counts.get(a["name"], 0) > 0]
+            if not hot:
+                hot = sorted(retriever.attractions, key=lambda a: a.get("rating", 0) or 0, reverse=True)[:8]
+            cols = st.columns(4)
+            for i, a in enumerate(hot[:8]):
+                with cols[i % 4]:
+                    if st.button(f"🔥 {a['name']}", key=f"hot_{i}", use_container_width=True):
+                        ask_question(f"介绍一下{a['name']}")
 
         st.markdown("##### 📂 快速浏览")
         cat_cols = st.columns(len(retriever.get_categories()))
@@ -79,6 +97,18 @@ def render_search_page():
             with cat_cols[i]:
                 if st.button(f"{cat}", key=f"cat_{cat}", use_container_width=True):
                     ask_question(f"{cat}有哪些推荐景点？")
+
+        # 热门省份快捷入口
+        provinces = retriever.get_provinces()
+        prov_counts = [(p, len(retriever.get_by_province(p))) for p in provinces]
+        prov_counts.sort(key=lambda x: x[1], reverse=True)
+        top_provs = [p for p, _ in prov_counts[:6]]
+        st.markdown("##### 🗺️ 热门省份")
+        prov_cols = st.columns(len(top_provs))
+        for i, p in enumerate(top_provs):
+            with prov_cols[i]:
+                if st.button(f"📍 {p}", key=f"prov_{p}", use_container_width=True):
+                    ask_question(f"{p}有哪些必去的景点？")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -194,7 +224,7 @@ def render_search_page():
                         mini_card(att, show_fav=True)
             else:
                 for att, score in page_results:
-                    display_attraction_card(att, score, highlight=query)
+                    mini_card(att, show_fav=True)
         else:
             pinyin_results = retriever.fuzzy_search(query, top_k=6)
             if pinyin_results:
@@ -424,7 +454,7 @@ def render_seasonal_page():
             matched = retriever.attractions[:20]
         st.success(f"找到 {len(matched)} 个适合当季游览的景点")
         for att in matched[:15]:
-            display_attraction_card(att)
+            mini_card(att)
     with tab2:
         retriever = st.session_state.retriever
         next_matched = [a for a in retriever.attractions
@@ -432,4 +462,4 @@ def render_seasonal_page():
         random.shuffle(next_matched)
         st.info(f"🌤️ 下个季节预热 — 推荐 {len(next_matched[:10])} 个景点")
         for att in next_matched[:10]:
-            display_attraction_card(att)
+            mini_card(att)

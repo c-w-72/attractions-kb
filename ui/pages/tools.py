@@ -5,7 +5,7 @@ from engine.itinerary import generate_itinerary
 from data.persistence import load_favorites, toggle_favorite, save_note, batch_remove_favorites
 from data.cost_data import estimate_trip_cost, COST_ESTIMATES
 from ui.components import (
-    ask_question, display_attraction_card, display_cost_estimate,
+    ask_question, display_cost_estimate,
     mini_card, _get_favorites_set, _invalidate_favorites,
 )
 from engine.monitor import get_stats as get_perf_stats
@@ -368,10 +368,15 @@ def render_stats_page():
             )
 
     st.markdown("---")
-    st.markdown("##### 系统信息")
-    st.markdown(f"- 检索方式: {'TF-IDF + 语义融合' if has_semantic else 'TF-IDF 字段加权'}")
-        st.markdown("- 意图识别: 优先级规则 + 150+别名库 + 共指消解")
-        st.markdown(f"- 景点数: {stats['total']} | 覆盖 {stats['provinces']} 省")
+    st.markdown("##### ℹ️ 关于")
+    st.markdown(f"- **版本**: v2.0 (2026-07)")
+    st.markdown(f"- **数据量**: {stats['total']} 个景点 | 覆盖 {stats['provinces']} 省 | {len(stats['categories'])} 个分类")
+    st.markdown(f"- **所有景点均含 GPS 坐标**")
+    st.markdown(f"- **检索方式**: {'TF-IDF + 语义融合' if has_semantic else 'TF-IDF 字段加权'}")
+    st.markdown(f"- **意图识别**: 优先级规则 + 150+别名库 + 共指消解")
+    st.markdown(f"- **数据来源**: 公开旅游资料整理 | 图片来自 Wikimedia Commons")
+    st.markdown(f"- **天气数据**: wttr.in (免费)")
+    st.markdown(f"- **LLM**: Claude / OpenAI (可选)")
 
     perf = get_perf_stats()
     if perf.counts:
@@ -430,4 +435,4 @@ def render_rankings_page():
         for rank, (score, att) in enumerate(scored[:20], 1):
             pct = int(score * 100)
             st.markdown(f"**#{rank}** — {att['name']}（综合 {pct}%）")
-            display_attraction_card(att)
+            mini_card(att)

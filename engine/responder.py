@@ -7,6 +7,7 @@
 
 import random
 import os
+import re
 import streamlit as st
 from engine.intent import SCENARIO_LABELS
 from engine.llm import get_llm, make_prompt
@@ -179,8 +180,9 @@ class Responder:
         yield ("status", "🤖 AI 思考中...")
         collected = []
         for text_chunk in self.llm.chat_stream(messages):
-            collected.append(text_chunk)
-            yield ("content", text_chunk)
+            clean = re.sub(r'<[^>]+>', '', text_chunk)
+            collected.append(clean)
+            yield ("content", clean)
 
         answer = "".join(collected)
         if answer.strip():
@@ -221,7 +223,7 @@ class Responder:
             answer_parts.append(f"### {att['name']}")
             answer_parts.append(self._format_short(att))
             answer_parts.append("")
-            answer_parts.append(f'<span class="scenario-badge {css}">{label}</span>')
+            answer_parts.append(label)
 
             content = self._get_scenario_content(att, scenario, season)
             answer_parts.append(content)
@@ -291,7 +293,7 @@ class Responder:
                 answer_parts.append(f"### {top_att['name']}")
                 answer_parts.append(self._format_short(top_att))
                 answer_parts.append("")
-                answer_parts.append(f'<span class="scenario-badge {css}">{label}</span>')
+                answer_parts.append(label)
                 answer_parts.append(self._get_scenario_content(top_att, scenario, season))
                 answer_info["scenario"] = scenario
                 yield ("content", "\n\n".join(answer_parts))

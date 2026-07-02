@@ -152,8 +152,27 @@ def fetch_image(attraction_name: str) -> str | None:
     return urls[0] if urls else None
 
 
+def _fetch_wikimedia_variations(attraction_name: str) -> list:
+    """多个搜索词查询 Wikimedia，提高命中率"""
+    queries = [attraction_name]
+    # 添加变体查询词
+    for suffix in ["风景", "旅游", "景区", "景点"]:
+        if suffix not in attraction_name:
+            queries.append(f"{attraction_name} {suffix}")
+    seen = set()
+    urls = []
+    for q in queries:
+        for url in _fetch_wikimedia(q):
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+        if len(urls) >= 5:
+            break
+    return urls[:5]
+
+
 def fetch_images(attraction_name: str, max_images: int = 5) -> list:
-    """获取多张景点图片URL (带内存+文件缓存)"""
+    """获取多张景点图片URL (带内存+文件缓存，失败时多词重试)"""
     cache_key = f"images_{attraction_name}"
     # 内存缓存
     urls = _cache.get(cache_key, (0, None))[1]
@@ -172,6 +191,9 @@ def fetch_images(attraction_name: str, max_images: int = 5) -> list:
             return urls[:max_images]
 
     urls = _fetch_wikimedia(attraction_name)
+    if not urls:
+        # 降级：多词重试
+        urls = _fetch_wikimedia_variations(attraction_name)
     if urls:
         _cache[cache_key] = (time.time(), urls)
         file_cache[cache_key] = {"urls": urls, "t": time.time()}

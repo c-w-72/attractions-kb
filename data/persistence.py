@@ -105,12 +105,22 @@ def save_note(att_name: str, note: str):
 
 # ===== 对话历史持久化 =====
 
+def _strip_html(text: str) -> str:
+    """移除消息中的 HTML 标签"""
+    import re
+    return re.sub(r'<[^>]+>', '', text)
+
+
 def load_chat_history():
     if not os.path.exists(CHAT_HISTORY_FILE):
         return []
     try:
         with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            msgs = json.load(f)
+        for m in msgs:
+            if "content" in m:
+                m["content"] = _strip_html(m["content"])
+        return msgs
     except Exception:
         return []
 

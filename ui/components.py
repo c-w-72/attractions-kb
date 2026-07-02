@@ -212,6 +212,14 @@ def mini_card(att, show_fav=False):
     fav = att["name"] in fav_set
     fav_icon = " ⭐" if fav else ""
 
+    name = att['name']
+    rating = att.get('rating', '')
+    province = att['province']
+    city = att.get('city', '')
+    ticket = att.get('ticket', '')
+    highlights = att.get('highlights', '')[:80]
+    line = f"**{name}{fav_icon}** {stars} {rating} — {province} {city} | 🎫 {ticket}"
+
     if show_fav:
         fav_label = "❤️" if fav else "🤍"
         cols = st.columns([1, 20])
@@ -221,27 +229,9 @@ def mini_card(att, show_fav=False):
                 _invalidate_favorites()
                 st.rerun()
         with cols[1]:
-            st.markdown(
-                f"""
-                <div class="mini-card">
-                    <b>{att['name']}{fav_icon}</b> {stars} {att.get('rating', '')} —
-                    {att['province']} {att.get('city', '')} | 🎫 {att.get('ticket', '')}
-                    <br><span class="mini-card-text">{att.get('highlights', '')[:80]}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"{line}\n\n{highlights}")
     else:
-        st.markdown(
-            f"""
-            <div class="mini-card">
-                <b>{att['name']}{fav_icon}</b> {stars} {att.get('rating', '')} —
-                {att['province']} {att.get('city', '')} | 🎫 {att.get('ticket', '')}
-                <br><span class="mini-card-text">{att.get('highlights', '')[:80]}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"{line}\n\n{highlights}")
 
 
 def display_cost_estimate(cost: dict, people: int = 1):
