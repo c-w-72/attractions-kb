@@ -245,15 +245,10 @@ def render_province_page():
                 return
             st.caption(f"找到 {len(atts)} 个匹配景点")
 
-        show_details = st.toggle("📋 显示完整详情", value=False, key="prov_detail_toggle")
-        if show_details:
-            for att in atts:
-                display_attraction_card(att)
-        else:
-            cols = st.columns(2)
-            for i, att in enumerate(atts):
-                with cols[i % 2]:
-                    mini_card(att, show_fav=True)
+        cols = st.columns(2)
+        for i, att in enumerate(atts):
+            with cols[i % 2]:
+                mini_card(att, show_fav=True)
 
 
 def render_category_page():
@@ -374,8 +369,12 @@ def render_random_page():
     # 用 rand_key 变化触发重新随机
     _ = st.session_state.get("rand_key", 0)
 
-    for att in retriever.random_attractions(n):
-        display_attraction_card(att)
+    rand_atts = retriever.random_attractions(n)
+    for i, att in enumerate(rand_atts):
+        if i % 2 == 0:
+            cols = st.columns(2)
+        with cols[i % 2]:
+            mini_card(att, show_fav=True)
 
 
 def render_seasonal_page():
