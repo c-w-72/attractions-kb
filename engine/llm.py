@@ -29,6 +29,12 @@ class LLMClient:
     def chat(self, messages: list, max_tokens: int = 1024) -> str | None:
         raise NotImplementedError
 
+    def chat_stream(self, messages: list, max_tokens: int = 1024):
+        """流式生成，逐段 yield 文本 (默认回退为非流式)"""
+        result = self.chat(messages, max_tokens)
+        if result:
+            yield result
+
 
 class ClaudeClient(LLMClient):
     """Anthropic Claude API"""
@@ -67,6 +73,48 @@ class ClaudeClient(LLMClient):
             logger.error(f"Claude API error: {e}")
             return None
 
+    def chat_stream(self, messages: list, max_tokens: int = 1024):
+        key = os.environ["ANTHROPIC_API_KEY"]
+        system = [m["content"] for m in messages if m["role"] == "system"]
+        body = {
+            "model": self.MODEL,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "messages": [m for m in messages if m["role"] != "system"],
+        }
+        if system:
+            body["system"] = system[0]
+
+        req = urllib.request.Request(
+            self.API_URL,
+            data=json.dumps(body).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode().strip()
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        try:
+                            data = json.loads(data_str)
+                            if data.get("type") == "content_block_delta":
+                                delta = data.get("delta", {})
+                                if delta.get("type") == "text_delta":
+                                    text = delta.get("text", "")
+                                    if text:
+                                        yield text
+                        except json.JSONDecodeError:
+                            pass
+        except urllib.error.HTTPError as e:
+            logger.error(f"Claude stream error: {e.code} {e.read().decode()[:200]}")
+        except Exception as e:
+            logger.error(f"Claude stream error: {e}")
+
 
 class OpenAIClient(LLMClient):
     """OpenAI API"""
@@ -99,6 +147,45 @@ class OpenAIClient(LLMClient):
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
             return None
+
+    def chat_stream(self, messages: list, max_tokens: int = 1024):
+        key = os.environ["OPENAI_API_KEY"]
+        body = {
+            "model": self.MODEL,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "messages": messages,
+        }
+        req = urllib.request.Request(
+            self.API_URL,
+            data=json.dumps(body).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {key}",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode().strip()
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            choices = data.get("choices", [])
+                            if choices:
+                                delta = choices[0].get("delta", {})
+                                text = delta.get("content", "")
+                                if text:
+                                    yield text
+                        except json.JSONDecodeError:
+                            pass
+        except urllib.error.HTTPError as e:
+            logger.error(f"OpenAI stream error: {e.code} {e.read().decode()[:200]}")
+        except Exception as e:
+            logger.error(f"OpenAI stream error: {e}")
 
 
 def make_prompt(query: str, entities: dict, attractions: list) -> list:

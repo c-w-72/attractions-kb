@@ -35,46 +35,54 @@ def render_qa_page():
         last_query = st.session_state.messages[-1]["content"]
 
         with st.chat_message("assistant", avatar="🏯"):
-            with st.spinner("🔍 思考中..."):
-                itinerary_info = parse_itinerary_query(last_query)
-                if itinerary_info:
-                    retriever = st.session_state.retriever
-                    responder = st.session_state.responder
-                    intent_engine = st.session_state.intent_engine
-                    ctx = responder.context.to_dict() if responder.context else None
-                    entities = intent_engine.extract_all(last_query, ctx)
-                    province = entities.get("province")
-                    city = entities.get("city")
-                    days = itinerary_info["days"]
-                    plan = generate_itinerary(
-                        retriever.attractions, last_query,
-                        province=province, city=city, days=days,
-                    )
-                    if plan:
-                        content = plan["itinerary"]
-                        followups = [
-                            f"这个行程大概要花多少钱？",
-                            f"{province or city or ''}还有哪些值得去的景点？",
-                            f"{province or city or ''}有什么特色美食？",
-                        ]
-                        st.markdown(content)
-                        add_message("assistant", content, followups=followups)
-                        st.rerun()
-
+            # 行程规划
+            itinerary_info = parse_itinerary_query(last_query)
+            if itinerary_info:
                 retriever = st.session_state.retriever
                 responder = st.session_state.responder
                 intent_engine = st.session_state.intent_engine
                 ctx = responder.context.to_dict() if responder.context else None
                 entities = intent_engine.extract_all(last_query, ctx)
-                try:
-                    result = responder.generate(last_query, entities)
-                except Exception:
-                    logger.exception("generate() failed")
-                    result = {"answer": "抱歉，处理问题时出现异常，请重试。", "followups": []}
+                province = entities.get("province")
+                city = entities.get("city")
+                days = itinerary_info["days"]
+                plan = generate_itinerary(
+                    retriever.attractions, last_query,
+                    province=province, city=city, days=days,
+                )
+                if plan:
+                    content = plan["itinerary"]
+                    followups = [
+                        f"这个行程大概要花多少钱？",
+                        f"{province or city or ''}还有哪些值得去的景点？",
+                        f"{province or city or ''}有什么特色美食？",
+                    ]
+                    st.markdown(content)
+                    add_message("assistant", content, followups=followups)
+                    st.rerun()
 
-            st.markdown(result["answer"])
+            # 常规问答（流式输出）
+            retriever = st.session_state.retriever
+            responder = st.session_state.responder
+            intent_engine = st.session_state.intent_engine
+            ctx = responder.context.to_dict() if responder.context else None
+            entities = intent_engine.extract_all(last_query, ctx)
+            message_placeholder = st.empty()
+            full_response = ""
+            followups = []
+            try:
+                for chunk_type, chunk_content in responder.generate_stream(last_query, entities):
+                    if chunk_type == "content":
+                        full_response += chunk_content
+                        message_placeholder.markdown(full_response + "▌")
+                    elif chunk_type == "followups":
+                        followups = chunk_content
+            except Exception:
+                logger.exception("generate_stream() failed")
+                full_response = "抱歉，处理问题时出现异常，请重试。"
+            message_placeholder.markdown(full_response)
 
-        add_message("assistant", result["answer"], followups=result.get("followups", []))
+        add_message("assistant", full_response, followups=followups)
         st.rerun()
 
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":

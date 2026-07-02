@@ -46,7 +46,7 @@ def display_followups(followups: list):
     cols = st.columns(2)
     for i, q in enumerate(followups):
         with cols[i % 2]:
-            if st.button(q, use_container_width=True, key=f"fu_{hash(q)}_{i}"):
+            if st.button(q, use_container_width=True, key=f"fu_{i}_{q[:10]}"):
                 ask_question(q)
 
 
@@ -127,8 +127,12 @@ def display_attraction_card(att, score=None, highlight=None):
 
         with tabs[0]:
             with st.spinner("查询天气..."):
-                city = att.get("city", "") or att["province"]
-                weather = fetch_weather_cached(city)
+                raw_city = att.get("city", "") or att["province"]
+                # 统一城市名后缀，保证缓存 key 一致
+                for _suffix in ["市", "县", "区", "地区", "自治州", "盟"]:
+                    if raw_city.endswith(_suffix) and len(raw_city) > 3:
+                        raw_city = raw_city[:-_suffix]
+                weather = fetch_weather_cached(raw_city)
             if weather:
                 st.markdown(
                     f'<div class="weather-card">'
@@ -180,16 +184,24 @@ def display_attraction_card(att, score=None, highlight=None):
                     st.session_state.img_cache[cache_key] = fetch_images(att["name"], max_images=6)
             img_urls = st.session_state.img_cache[cache_key]
             if img_urls:
+                # 点击放大预览
+                preview_key = f"img_preview_{att['id']}"
+                if preview_key in st.session_state:
+                    st.image(st.session_state[preview_key], use_container_width=True)
+                    if st.button("✕ 关闭预览", key=f"close_{att['id']}"):
+                        del st.session_state[preview_key]
+                        st.rerun()
                 n = len(img_urls)
                 cols = st.columns(min(n, 3))
                 for i, url in enumerate(img_urls):
                     with cols[i % 3]:
                         st.markdown(f'<a href="{url}" target="_blank"><img src="{url}" '
                                     f'style="width:100%;aspect-ratio:4/3;object-fit:cover;'
-                                    f'border-radius:6px;margin-bottom:6px"></a>',
+                                    f'border-radius:6px;margin-bottom:4px"></a>',
                                     unsafe_allow_html=True)
-                if n == 1:
-                    st.caption(f"🖼️ {img_urls[0]}")
+                        if st.button("🔍 放大", key=f"img_{att['id']}_{i}", use_container_width=True):
+                            st.session_state[preview_key] = url
+                            st.rerun()
             else:
                 st.info("暂未找到相关图片")
 

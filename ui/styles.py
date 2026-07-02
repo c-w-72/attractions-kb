@@ -85,7 +85,9 @@ COMMON_CSS = '''
     .season-badge-autumn { background: #fce4ec; color: #c62828; border: 1px solid #ef9a9a; }
     .season-badge-winter { background: #e3f2fd; color: #0d47a1; border: 1px solid #90caf9; }
     @media (max-width: 768px) {
-        .stButton button { font-size: 0.75rem; padding: 0.2rem 0.4rem; }
+        .stButton button { font-size: 0.75rem; padding: 0.2rem 0.4rem; min-height: 2.2rem; }
+        .stButton button[data-testid="baseButton-primary"] { min-height: 2.5rem; }
+        .stCheckbox { min-height: 2.5rem; display: flex; align-items: center; }
         .tag { font-size: 0.7rem; padding: 1px 6px; }
         .attraction-card { padding: 0.8rem; }
         .compare-table { font-size: 0.8rem; }
@@ -104,4 +106,12 @@ COMMON_CSS = '''
     }
     .mini-card b { color: var(--card-title); }
     .mini-card-text { font-size: 0.9rem; color: var(--sub-text); }
+    /* 统一提示样式 */
+    div[data-testid="stAlert"] { border-radius: 8px; font-size: 0.9rem; }
+    div[data-testid="stAlertContainer"] { padding: 0.5rem 0; }
+    .stAlert > div[data-baseweb="notification"] { border-radius: 8px !important; }
+    div[data-testid="stInfo"] { border-left-color: #1f77b4 !important; }
+    div[data-testid="stWarning"] { border-left-color: #e67e22 !important; }
+    div[data-testid="stError"] { border-left-color: #e74c3c !important; }
+    div[data-testid="stSuccess"] { border-left-color: #27ae60 !important; }
 '''

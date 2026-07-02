@@ -13,4 +13,9 @@ data/cache/
 data/favorites.json
 data/chat_history.json
 data/search_counts.json
+data/search_history.json
 scripts/_names*.txt
+archive/
+.pytest_cache/
+.vscode/
+.idea/

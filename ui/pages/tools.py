@@ -8,6 +8,7 @@ from ui.components import (
     ask_question, display_attraction_card, display_cost_estimate,
     mini_card, _get_favorites_set, _invalidate_favorites,
 )
+from engine.monitor import get_stats as get_perf_stats
 
 
 def render_compare_page():
@@ -27,29 +28,41 @@ def render_compare_page():
     atts = [retriever.get_by_name(n) for n in selected]
     atts = [a for a in atts if a]
 
-    fields = [
+    all_fields = [
         ("省份", "province"), ("城市", "city"), ("分类", "category"),
         ("评分", "rating"), ("门票", "ticket"), ("最佳季节", "best_season"),
         ("特色亮点", "highlights"), ("简介", "description"),
         ("基础信息", "basic_info"), ("游玩攻略", "travel_guide"),
         ("交通住宿", "transport"), ("文化特色", "culture"), ("美食特产", "food"),
     ]
+    selected_fields = st.multiselect(
+        "选择要对比的维度",
+        [f[0] for f in all_fields],
+        default=[f[0] for f in all_fields],
+        key="compare_fields",
+    )
+    fields = [(l, k) for l, k in all_fields if l in selected_fields]
 
-    html = '<div class="compare-wrapper" style="overflow-x:auto;max-width:100%">'
-    html += '<table class="compare-table"><tr><th style="width:100px">对比项</th>'
+    if not fields:
+        st.info("请至少选择一个对比维度")
+        return
+
+    table_html = '<div class="compare-wrapper" style="overflow-x:auto;max-width:100%">'
+    table_html += '<table class="compare-table"><tr><th style="width:100px">对比项</th>'
     for att in atts:
-        html += f"<th>{att['name']}</th>"
-    html += "</tr>"
+        table_html += f"<th>{att['name']}</th>"
+    table_html += "</tr>"
     for label, field in fields:
-        html += f"<tr><td><b>{label}</b></td>"
+        table_html += f"<tr><td><b>{label}</b></td>"
         for att in atts:
             val = att.get(field, "")
             if field == "rating":
                 val = f"{'⭐' * int(round(val or 0))} {val}"
-            html += f"<td>{str(val)[:200]}</td>"
-        html += "</tr>"
-    html += "</table></div>"
-    st.markdown(html, unsafe_allow_html=True)
+            text = str(val)
+            table_html += f"<td>{text[:200]}{'<span style=\"color:#999\"> ...</span>' if len(text) > 200 else ''}</td>"
+        table_html += "</tr>"
+    table_html += "</table></div>"
+    st.markdown(table_html, unsafe_allow_html=True)
 
 
 def render_itinerary_page():
@@ -105,6 +118,14 @@ def render_itinerary_page():
             cost = estimate_trip_cost(province, days)
             display_cost_estimate(cost)
 
+            cost_col1, cost_col2, cost_col3 = st.columns([3, 1, 6])
+            with cost_col2:
+                if st.button("📊 详细估算", key="iti_cost_detail", use_container_width=True):
+                    st.session_state.cost_province = province
+                    st.session_state.cost_days = days
+                    st.session_state.nav_selected = "💰 费用估算"
+                    st.rerun()
+
             st.markdown("---")
             for day in plan.get("plan", []):
                 for a in day.get("attractions", []):
@@ -125,6 +146,28 @@ def render_favorites_page():
         return
 
     st.markdown(f"共收藏 **{len(favs)}** 个景点")
+
+    # 收藏搜索
+    fav_search = st.text_input("🔍 搜索收藏", placeholder="输入景点名称筛选...",
+                                label_visibility="collapsed", key="fav_search_input")
+    if fav_search:
+        q = fav_search.lower()
+        favs = [n for n in favs if q in n.lower()]
+        if not favs:
+            st.info(f"未找到匹配「{fav_search}」的收藏景点")
+            return
+        st.caption(f"找到 {len(favs)} 个匹配的收藏")
+
+    # 排序
+    retriever = st.session_state.retriever
+    sort_by = st.selectbox("排序", ["默认", "名称 A-Z", "评分从高到低", "评分从低到高"],
+                            key="fav_sort", label_visibility="collapsed")
+    if sort_by == "名称 A-Z":
+        favs = sorted(favs)
+    elif sort_by == "评分从高到低":
+        favs = sorted(favs, key=lambda n: (retriever.get_by_name(n) or {}).get("rating", 0) or 0, reverse=True)
+    elif sort_by == "评分从低到高":
+        favs = sorted(favs, key=lambda n: (retriever.get_by_name(n) or {}).get("rating", 0) or 0)
 
     # 批量操作栏
     if "fav_select_all" not in st.session_state:
@@ -173,7 +216,7 @@ def render_favorites_page():
 
     # 页数导航
     if total_pages > 1:
-        nav_cols = st.columns([5, 1, 1, 1, 5])
+        nav_cols = st.columns([4, 1, 1, 1, 4])
         with nav_cols[1]:
             if st.button("◀", disabled=fp <= 1, use_container_width=True):
                 st.session_state[fp_key] = fp - 1
@@ -184,6 +227,8 @@ def render_favorites_page():
             if st.button("▶", disabled=fp >= total_pages, use_container_width=True):
                 st.session_state[fp_key] = fp + 1
                 st.rerun()
+
+    st.caption(f"当前页 {len(page_names)} 项" + (f"，已选 {len(st.session_state.fav_selected)} 项" if st.session_state.fav_selected else ""))
 
     for name in page_names:
         att = retriever.get_by_name(name)
@@ -231,11 +276,14 @@ def render_cost_page():
     st.markdown('<div class="sub-header">按省份和天数的旅行费用估算参考</div>', unsafe_allow_html=True)
 
     provinces = list(COST_ESTIMATES.keys())
+    default_province = st.session_state.pop("cost_province", "四川")
+    default_days = st.session_state.pop("cost_days", 3)
     col1, col2, col3 = st.columns(3)
     with col1:
-        province = st.selectbox("目的地省份", provinces, index=provinces.index("四川"))
+        province = st.selectbox("目的地省份", provinces,
+                                 index=provinces.index(default_province) if default_province in provinces else provinces.index("四川"))
     with col2:
-        days = st.number_input("旅行天数", min_value=1, max_value=30, value=3)
+        days = st.number_input("旅行天数", min_value=1, max_value=30, value=default_days)
     with col3:
         people = st.number_input("人数", min_value=1, max_value=20, value=1)
 
@@ -295,11 +343,45 @@ def render_stats_page():
         for cat in stats["categories"]:
             st.markdown(f"- **{cat}**: {len(retriever.get_by_category(cat))} 个")
 
-        st.markdown("---")
-        st.markdown("##### 系统信息")
-        st.markdown(f"- 检索方式: {'TF-IDF + 语义融合' if has_semantic else 'TF-IDF 字段加权'}")
+    st.markdown("---")
+    st.markdown("##### 评分分布")
+    rating_buckets = {i: 0 for i in range(1, 6)}
+    for a in retriever.attractions:
+        r = int(round(a.get("rating", 0) or 0))
+        if 1 <= r <= 5:
+            rating_buckets[r] += 1
+    max_r = max(rating_buckets.values()) or 1
+    r_cols = st.columns(5)
+    for i in range(1, 6):
+        cnt = rating_buckets[i]
+        bar_h = int(cnt / max_r * 80)
+        with r_cols[i - 1]:
+            st.markdown(
+                f"<div style='text-align:center;font-size:0.85rem'>"
+                f"{'⭐' * i}</div>"
+                f"<div style='display:flex;flex-direction:column;align-items:center;"
+                f"justify-content:flex-end;height:100px'>"
+                f"<div style='background:#1f77b4;width:60%;height:{bar_h}px;"
+                f"border-radius:4px 4px 0 0;min-height:4px'></div></div>"
+                f"<div style='text-align:center;font-size:0.8rem;color:var(--sub-text)'>{cnt}</div>",
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("---")
+    st.markdown("##### 系统信息")
+    st.markdown(f"- 检索方式: {'TF-IDF + 语义融合' if has_semantic else 'TF-IDF 字段加权'}")
         st.markdown("- 意图识别: 优先级规则 + 150+别名库 + 共指消解")
-        st.markdown(f"- 景点数: {stats['total']} | 手工润色: 30+")
+        st.markdown(f"- 景点数: {stats['total']} | 覆盖 {stats['provinces']} 省")
+
+    perf = get_perf_stats()
+    if perf.counts:
+        st.markdown("---")
+        st.markdown("##### ⚡ 运行时性能")
+        for key in sorted(perf.counts):
+            n = perf.counts[key]
+            total = perf.totals[key]
+            avg = total / n if n else 0
+            st.markdown(f"- **{key}**: {n}次 | 总计 {total:.1f}s | 平均 {avg:.2f}s | 最慢 {perf.maxes[key]:.2f}s")
 
 
 def render_rankings_page():

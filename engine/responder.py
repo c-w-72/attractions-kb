@@ -160,12 +160,40 @@ class Responder:
         """生成回答（流式，逐段 yield）"""
         yield ("status", "🔍 正在分析你的问题...")
         try:
-            yield from self._generate_stream_inner(query, entities)
+            if self.use_llm:
+                yield from self._llm_stream(query, entities)
+            else:
+                yield from self._generate_stream_inner(query, entities)
         except Exception as e:
             logger.exception("generate_stream 异常: %s", e)
             yield ("content", "### 😅 抱歉\n处理你的问题时出现异常，请稍后重试或换个问法。")
             yield ("followups", [])
             yield ("answer_info", {})
+
+    def _llm_stream(self, query: str, entities: dict):
+        """LLM 流式回答"""
+        results = self.retriever.search(query, top_k=8)
+        relevant = [att for att, _ in results] if results else self.retriever.attractions[:5]
+        messages = make_prompt(query, entities, relevant)
+
+        yield ("status", "🤖 AI 思考中...")
+        collected = []
+        for text_chunk in self.llm.chat_stream(messages):
+            collected.append(text_chunk)
+            yield ("content", text_chunk)
+
+        answer = "".join(collected)
+        if answer.strip():
+            answer_info = {"type": "llm", "attraction_name": entities.get("attraction_name")}
+            followups = self._generate_context_followups(answer_info)
+            self.context.update(entities, answer_info)
+            yield ("followups", followups)
+            yield ("answer_info", answer_info)
+        else:
+            # LLM 流式失败，回退到模板
+            logger.warning("LLM stream returned empty, falling back to template")
+            yield ("status", "🔄 回退到模板回答...")
+            yield from self._generate_stream_inner(query, entities)
 
     def _generate_stream_inner(self, query: str, entities: dict):
         """生成回答内部逻辑（实际处理）"""

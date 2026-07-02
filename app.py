@@ -30,6 +30,9 @@ DARK_OVERRIDES = '''
     .season-badge-autumn { background: #3d1b1b; color: #ef9a9a; border-color: #c62828; }
     .season-badge-winter { background: #1b2d3d; color: #90caf9; border-color: #0d47a1; }
     div[style*="background:#fff"] > b { color: #e0e0e0; }
+    img { border: 1px solid #555; border-radius: 6px; }
+    .compare-table td { background: #2d2d2d; color: #e0e0e0; }
+    .compare-table tr:nth-child(even) td { background: #333; }
 '''
 from ui.pages import PAGE_ROUTER
 
@@ -159,8 +162,8 @@ with st.sidebar:
             if st.button(item, key=f"nav_{item}", use_container_width=True, type=btn_type):
                 old_page = st.session_state.get("nav_selected", "")
                 if old_page != item:
-                    # 页面切换时清理跨页面缓存 key（保留搜索结果）
-                    for k in ["fav_select_all", "fav_selected", "fav_page"]:
+                    # 页面切换时清理跨页面缓存 key（保留搜索结果和地图状态）
+                    for k in ["fav_select_all", "fav_selected", "fav_page", "rand_key"]:
                         st.session_state.pop(k, None)
                 st.session_state.nav_selected = item
                 st.rerun()
